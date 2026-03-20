@@ -31,6 +31,9 @@ CSV_FIELD_MAP = {
 async def sync_company_master(db: AsyncSession, edinet_client: Optional[EdinetClient] = None) -> int:
     """Sync EDINET company list to local database.
 
+    Uses the documents API to discover companies from recent filings,
+    since the EdinetcodeDlInfo.csv endpoint is no longer available.
+
     Args:
         db: Database session.
         edinet_client: Optional EDINET client (created if not provided).
@@ -38,48 +41,58 @@ async def sync_company_master(db: AsyncSession, edinet_client: Optional[EdinetCl
     Returns:
         Number of companies synced.
     """
+    from datetime import date, timedelta
+
     client = edinet_client or EdinetClient()
+    seen_edinet_codes: set[str] = set()
+    count = 0
+
     try:
-        raw_companies = await client.get_company_list()
+        # Scan last 90 days of filings to discover listed companies
+        today = date.today()
+        for day_offset in range(90):
+            check_date = today - timedelta(days=day_offset)
+            try:
+                docs = await client.list_documents(check_date)
+            except Exception:
+                logger.warning("Failed to fetch docs for %s, skipping", check_date)
+                continue
+
+            for doc in docs:
+                edinet_code = (doc.get("edinetCode") or "").strip()
+                sec_code = (doc.get("secCode") or "").strip()
+                filer_name = (doc.get("filerName") or "").strip()
+
+                # Only import companies with securities codes (listed)
+                if not edinet_code or not sec_code or not filer_name:
+                    continue
+                if edinet_code in seen_edinet_codes:
+                    continue
+                seen_edinet_codes.add(edinet_code)
+
+                # Upsert
+                stmt = select(Company).where(Company.edinet_code == edinet_code)
+                result = await db.execute(stmt)
+                company = result.scalar_one_or_none()
+
+                if company is None:
+                    company = Company(edinet_code=edinet_code)
+                    db.add(company)
+
+                company.name = filer_name
+                company.securities_code = sec_code
+                company.industry_name = doc.get("industryCodeForSummary")
+                count += 1
+
+            if day_offset % 10 == 0:
+                logger.info("Synced %d companies so far (scanned %d days)", count, day_offset + 1)
+
     finally:
         if edinet_client is None:
             await client.close()
 
-    count = 0
-    for row in raw_companies:
-        edinet_code = row.get("ＥＤＩＮＥＴコード", "").strip()
-        if not edinet_code:
-            continue
-
-        # Only import listed companies (上場区分 contains exchange info)
-        listing = row.get("上場区分", "").strip()
-        if not listing or listing == "非上場":
-            continue
-
-        securities_code = row.get("証券コード", "").strip() or None
-        name = row.get("提出者名", "").strip()
-        if not name:
-            continue
-
-        # Upsert: check if company exists
-        stmt = select(Company).where(Company.edinet_code == edinet_code)
-        result = await db.execute(stmt)
-        company = result.scalar_one_or_none()
-
-        if company is None:
-            company = Company(edinet_code=edinet_code)
-            db.add(company)
-
-        company.name = name
-        company.name_en = row.get("提出者名（英字）", "").strip() or None
-        company.securities_code = securities_code
-        company.industry_name = row.get("提出者業種", "").strip() or None
-        company.exchange = listing
-
-        count += 1
-
     await db.flush()
-    logger.info("Synced %d companies from EDINET", count)
+    logger.info("Synced %d companies from EDINET filings", count)
     return count
 
 
