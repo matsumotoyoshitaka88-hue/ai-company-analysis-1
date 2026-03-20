@@ -1,11 +1,20 @@
-"""PDF renderer - converts report data to a styled PDF using WeasyPrint."""
+"""PDF renderer - converts report data to a styled PDF.
+
+Uses WeasyPrint when available, falls back to HTML bytes for environments
+where native dependencies are not installed.
+"""
 from __future__ import annotations
 
 import html
 from datetime import datetime
 from typing import Any
 
-from weasyprint import HTML
+try:
+    from weasyprint import HTML as _WeasyHTML
+
+    _HAS_WEASYPRINT = True
+except ImportError:
+    _HAS_WEASYPRINT = False
 
 
 def render_pdf(report_data: dict[str, Any]) -> bytes:
@@ -15,10 +24,13 @@ def render_pdf(report_data: dict[str, Any]) -> bytes:
         report_data: The report_data JSONB from DiagnosisReport.
 
     Returns:
-        PDF file contents as bytes.
+        PDF file contents as bytes (or HTML bytes when WeasyPrint unavailable).
     """
     html_content = _build_html(report_data)
-    return HTML(string=html_content).write_pdf()
+    if _HAS_WEASYPRINT:
+        return _WeasyHTML(string=html_content).write_pdf()
+    # Fallback: return HTML content as bytes
+    return html_content.encode("utf-8")
 
 
 def _esc(text: Any) -> str:
@@ -236,12 +248,17 @@ def _build_peer_table(ranking: list[dict[str, Any]]) -> str:
         return ""
     rows = ""
     for r in ranking:
+        metric_labels = {
+            "operating_margin": "営業利益率",
+            "roe": "ROE",
+            "asset_turnover": "総資産回転率",
+        }
+        metric = metric_labels.get(r.get("metric", ""), r.get("metric", ""))
         rows += f"""<tr>
-          <td>{_esc(r.get('name', ''))}</td>
-          <td>{_esc(r.get('score', ''))}</td>
-          <td>{_esc(r.get('revenue', ''))}</td>
+          <td>{_esc(metric)}</td>
+          <td>{_esc(r.get('rank', ''))}/{_esc(r.get('total', ''))}社中</td>
         </tr>"""
     return f"""<table class="peer-table">
-      <thead><tr><th>企業名</th><th>スコア</th><th>売上高</th></tr></thead>
+      <thead><tr><th>指標</th><th>業界内順位</th></tr></thead>
       <tbody>{rows}</tbody>
     </table>"""

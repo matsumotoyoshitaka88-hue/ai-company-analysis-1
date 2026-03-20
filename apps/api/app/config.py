@@ -7,8 +7,8 @@ class Settings(BaseSettings):
     app_name: str = "AI Company Diagnosis Service"
     debug: bool = False
 
-    # Database
-    database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/company_analysis"
+    # Database (use SQLite for local dev, PostgreSQL for production)
+    database_url: str = "sqlite+aiosqlite:///./company_analysis.db"
 
     # Redis
     redis_url: str = "redis://localhost:6379"
