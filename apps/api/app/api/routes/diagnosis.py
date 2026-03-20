@@ -5,12 +5,14 @@ import logging
 import uuid
 
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import Response
 from sqlalchemy import select
 
 from app.api.deps import DbSession
 from app.db.session import async_session
 from app.models.diagnosis import DiagnosisJob, DiagnosisReport
 from app.schemas.diagnosis import DiagnosisJobResponse, DiagnosisRequest, DiagnosisStatusResponse
+from app.services.report.pdf_renderer import render_pdf
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -88,4 +90,27 @@ async def get_diagnosis_status(
         progress=job.progress,
         report=report_data,
         generated_at=generated_at,
+    )
+
+
+@router.get("/{job_id}/pdf")
+async def download_diagnosis_pdf(
+    job_id: uuid.UUID,
+    db: DbSession,
+) -> Response:
+    stmt = select(DiagnosisReport).where(DiagnosisReport.job_id == job_id)
+    result = await db.execute(stmt)
+    report = result.scalar_one_or_none()
+    if not report:
+        raise HTTPException(status_code=404, detail="Report not found")
+
+    pdf_bytes = render_pdf(report.report_data)
+
+    company_name = report.report_data.get("company", {}).get("name", "report")
+    filename = f"diagnosis_{company_name}.pdf"
+
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
