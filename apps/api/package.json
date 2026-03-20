@@ -1,0 +1,9 @@
+{
+  "name": "api",
+  "private": true,
+  "scripts": {
+    "dev": ".venv/bin/uvicorn app.main:app --reload --port ${PORT:-8000}",
+    "lint": "ruff check app/",
+    "test": "pytest"
+  }
+}
